@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ZZT Live Renderer</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0a0a0a;
+      color: #ccc;
+      font-family: monospace;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    #toolbar {
+      background: #111;
+      border-bottom: 1px solid #333;
+      padding: 6px 12px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+
+    #toolbar h1 { font-size: 14px; color: #0f0; letter-spacing: 1px; }
+    #world-name { color: #ff0; font-size: 13px; }
+    #status { margin-left: auto; font-size: 12px; color: #666; }
+    #status.ok   { color: #0a0; }
+    #status.warn { color: #fa0; }
+    #status.err  { color: #f44; }
+
+    #board-nav {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    #board-nav button {
+      background: #222;
+      border: 1px solid #444;
+      color: #aaa;
+      padding: 2px 8px;
+      cursor: pointer;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    #board-nav button:hover { background: #333; color: #fff; }
+    #board-nav button.active { background: #004; border-color: #06f; color: #8af; }
+
+    #mode-toggle {
+      background: #222;
+      border: 1px solid #444;
+      color: #aaa;
+      padding: 2px 8px;
+      cursor: pointer;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    #mode-toggle:hover { background: #333; color: #fff; }
+
+    #content {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* ── ASCII renderer ─────────────────────────────────────────────────── */
+    #ascii-view {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #board-title {
+      background: #111;
+      border-bottom: 1px solid #222;
+      padding: 4px 12px;
+      font-size: 12px;
+      color: #888;
+      flex-shrink: 0;
+    }
+
+    #board-art {
+      flex: 1;
+      padding: 12px 16px;
+      overflow: auto;
+      font-size: 14px;
+      line-height: 1.35;
+      white-space: pre;
+      color: #ddd;
+      tab-size: 1;
+    }
+
+    /* Color each character based on ZZT element type */
+    .elem-solid    { color: #aaa; }
+    .elem-player   { color: #0ff; }
+    .elem-object   { color: #ff0; }
+    .elem-enemy    { color: #f44; }
+    .elem-gem      { color: #f0f; }
+    .elem-key      { color: #fa0; }
+    .elem-ammo     { color: #6ff; }
+    .elem-water    { color: #26f; }
+    .elem-empty    { color: #333; }
+    .elem-forest   { color: #060; }
+
+    /* Stats sidebar */
+    #stats-panel {
+      width: 220px;
+      background: #0d0d0d;
+      border-left: 1px solid #222;
+      overflow-y: auto;
+      padding: 8px;
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+    #stats-panel h3 { color: #666; margin-bottom: 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+    .stat-entry {
+      padding: 3px 5px;
+      border-bottom: 1px solid #1a1a1a;
+      cursor: default;
+    }
+    .stat-entry:hover { background: #181818; }
+    .stat-coord { color: #555; font-size: 10px; }
+    .stat-name  { color: #8af; }
+    .stat-has-oop { color: #6d6; }
+
+    /* ── Zeta canvas view ───────────────────────────────────────────────── */
+    #zeta-view {
+      flex: 1;
+      display: none;
+      justify-content: center;
+      align-items: center;
+      background: #000;
+    }
+    #zeta-view canvas {
+      image-rendering: pixelated;
+      max-width: 100%;
+      max-height: 100%;
+    }
+
+    /* Reload flash */
+    @keyframes flash { 0%,100%{opacity:1} 50%{opacity:.4} }
+    .reloading { animation: flash 0.3s ease 2; }
+
+    /* Exits display */
+    #exits {
+      font-size: 11px;
+      color: #555;
+      display: flex;
+      gap: 8px;
+    }
+    #exits span.active { color: #06f; }
+  </style>
+</head>
+<body>
+
+<div id="toolbar">
+  <h1>ZZT</h1>
+  <span id="world-name">—</span>
+  <div id="board-nav"></div>
+  <div id="exits">
+    <span id="exit-n">↑N</span>
+    <span id="exit-s">↓S</span>
+    <span id="exit-e">→E</span>
+    <span id="exit-w">←W</span>
+  </div>
+  <button id="mode-toggle" onclick="toggleMode()" title="Switch between ASCII and Zeta WASM view">ASCII</button>
+  <span id="status" class="warn">Connecting…</span>
+</div>
+
+<div id="content">
+  <div id="ascii-view">
+    <div id="board-title">Board 1</div>
+    <pre id="board-art">Loading…</pre>
+  </div>
+  <div id="stats-panel">
+    <h3>Objects / Stats</h3>
+    <div id="stats-list"></div>
+  </div>
+  <div id="zeta-view">
+    <canvas id="zeta-canvas"></canvas>
+  </div>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+let currentBoard = 1;
+let boardData = null;
+let mode = "ascii"; // "ascii" | "zeta"
+let zetaReady = false;
+let ws = null;
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+function connectWS() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+  ws.onopen = () => {
+    setStatus("Live", "ok");
+    loadBoard(currentBoard);
+  };
+
+  ws.onmessage = (evt) => {
+    const msg = JSON.parse(evt.data);
+    if (msg.type === "reload") {
+      setStatus("Reloading…", "warn");
+      document.getElementById("board-art").classList.add("reloading");
+      setTimeout(() => {
+        loadBoard(currentBoard);
+        if (mode === "zeta") zetaReload();
+        document.getElementById("board-art").classList.remove("reloading");
+      }, 100);
+    }
+  };
+
+  ws.onclose = () => {
+    setStatus("Disconnected — retrying…", "err");
+    setTimeout(connectWS, 2000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+// ── ASCII renderer ────────────────────────────────────────────────────────────
+async function loadBoard(index) {
+  try {
+    const resp = await fetch(`/api/board/${index}?t=${Date.now()}`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    boardData = await resp.json();
+    currentBoard = index;
+    renderASCII();
+    renderNav();
+    renderStats();
+    renderExits();
+    setStatus("Live", "ok");
+  } catch (e) {
+    setStatus(`Error: ${e.message}`, "err");
+  }
+}
+
+function renderASCII() {
+  if (!boardData) return;
+  document.getElementById("board-title").textContent =
+    `Board ${boardData.board_index}: ${boardData.name}`;
+  document.getElementById("board-art").textContent = boardData.ascii_art;
+  document.getElementById("world-name").textContent = boardData.world_name || "";
+}
+
+function renderNav() {
+  if (!boardData) return;
+  const nav = document.getElementById("board-nav");
+  nav.innerHTML = "";
+  (boardData.boards || []).forEach(b => {
+    const btn = document.createElement("button");
+    btn.textContent = `[${b.index}] ${b.name}`;
+    if (b.index === currentBoard) btn.classList.add("active");
+    btn.onclick = () => loadBoard(b.index);
+    nav.appendChild(btn);
+  });
+}
+
+function renderStats() {
+  if (!boardData) return;
+  const list = document.getElementById("stats-list");
+  list.innerHTML = "";
+  (boardData.stats || []).filter(s => s.element !== "Player").forEach(s => {
+    const div = document.createElement("div");
+    div.className = "stat-entry";
+    div.innerHTML =
+      `<span class="stat-name">${s.element}</span> ` +
+      `<span class="stat-coord">(${s.x},${s.y})</span>` +
+      (s.has_oop ? ` <span class="stat-has-oop">[OOP]</span>` : "");
+    list.appendChild(div);
+  });
+}
+
+function renderExits() {
+  if (!boardData) return;
+  const exits = {n: boardData.north, s: boardData.south, e: boardData.east, w: boardData.west};
+  ["n","s","e","w"].forEach(dir => {
+    const el = document.getElementById(`exit-${dir}`);
+    if (exits[dir]) {
+      el.classList.add("active");
+      el.title = `Board ${exits[dir]}`;
+    } else {
+      el.classList.remove("active");
+      el.title = "";
+    }
+  });
+}
+
+// ── Zeta WASM integration ─────────────────────────────────────────────────────
+// Requires: python3 renderer/get_zeta.py  (downloads Zeta web build to renderer/zeta-web/)
+//
+// Zeta's web build uses Emscripten. The Module exposes:
+//   Module.FS.writeFile(path, uint8array)  — write a file into the virtual FS
+//   Module.ccall('zeta_load_world', ...)   — tell Zeta to load a world
+//
+// If your Zeta build uses a different API, adjust zetaInit() and zetaReload() below.
+
+let zetaModule = null;
+
+async function tryLoadZeta() {
+  try {
+    // Check if Zeta assets are available
+    const check = await fetch("/zeta-web/zeta.js", {method: "HEAD"});
+    if (!check.ok) return false;
+
+    return new Promise((resolve) => {
+      // Emscripten Module configuration — must be set BEFORE loading zeta.js
+      window.Module = {
+        canvas: document.getElementById("zeta-canvas"),
+        onRuntimeInitialized: async function() {
+          zetaModule = window.Module;
+          zetaReady = true;
+          await zetaReload();
+          resolve(true);
+        },
+        locateFile: (f) => `/zeta-web/${f}`,
+        print:      (s) => console.log("[zeta]", s),
+        printErr:   (s) => console.warn("[zeta]", s),
+        // Suppress the default fullscreen button
+        noInitialRun: true,
+      };
+      const script = document.createElement("script");
+      script.src = "/zeta-web/zeta.js";
+      script.onerror = () => resolve(false);
+      document.head.appendChild(script);
+    });
+  } catch {
+    return false;
+  }
+}
+
+async function zetaReload() {
+  if (!zetaModule) return;
+  try {
+    const resp = await fetch(`/world.zzt?t=${Date.now()}`);
+    const data = new Uint8Array(await resp.arrayBuffer());
+    // Write into Emscripten virtual FS
+    try { zetaModule.FS.mkdir("/zzt"); } catch {}
+    zetaModule.FS.writeFile("/zzt/WORLD.ZZT", data);
+    // Call Zeta's world-load function.
+    // Adjust the function name to match your Zeta build version:
+    if (typeof zetaModule.ccall === "function") {
+      try {
+        zetaModule.ccall("zeta_load_world", null, ["string"], ["/zzt/WORLD.ZZT"]);
+      } catch {
+        // Some builds use a different entry point
+        try { zetaModule._zeta_load_world(); } catch {}
+      }
+    }
+  } catch (e) {
+    console.warn("Zeta reload failed:", e);
+  }
+}
+
+// ── Mode toggle ───────────────────────────────────────────────────────────────
+let zetaAttempted = false;
+
+async function toggleMode() {
+  if (mode === "ascii") {
+    if (!zetaAttempted) {
+      zetaAttempted = true;
+      document.getElementById("mode-toggle").textContent = "Loading…";
+      const ok = await tryLoadZeta();
+      if (!ok) {
+        alert(
+          "Zeta WASM not found.\n\n" +
+          "Run:  python3 renderer/get_zeta.py\n" +
+          "to download the Zeta web build, then refresh."
+        );
+        document.getElementById("mode-toggle").textContent = "ASCII";
+        return;
+      }
+    }
+    if (!zetaReady) return;
+    mode = "zeta";
+    document.getElementById("ascii-view").style.display = "none";
+    document.getElementById("stats-panel").style.display = "none";
+    document.getElementById("zeta-view").style.display = "flex";
+    document.getElementById("mode-toggle").textContent = "Zeta";
+  } else {
+    mode = "ascii";
+    document.getElementById("ascii-view").style.display = "flex";
+    document.getElementById("stats-panel").style.display = "block";
+    document.getElementById("zeta-view").style.display = "none";
+    document.getElementById("mode-toggle").textContent = "ASCII";
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function setStatus(text, cls) {
+  const el = document.getElementById("status");
+  el.textContent = text;
+  el.className = cls;
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+connectWS();
+</script>
+</body>
+</html>

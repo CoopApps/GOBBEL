@@ -1,0 +1,7 @@
+# ZZT Live Renderer dependencies
+aiohttp>=3.9
+watchdog>=4.0
+
+# Phase 3: Playwright screenshot (for zzt_screenshot MCP tool)
+# After installing, also run: playwright install chromium
+playwright>=1.40

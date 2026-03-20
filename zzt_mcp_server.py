@@ -248,6 +248,42 @@ TOOLS = [
         },
     },
     {
+        "name": "zzt_query_region",
+        "description": (
+            "Return detailed tile info (element, color, stat_index) for every cell "
+            "in a rectangular region of a board. Use this before editing to see exactly "
+            "what is at each coordinate. Coordinates are 1-based."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path":        {"type": "string"},
+                "board_index": {"type": "integer"},
+                "x1":          {"type": "integer", "description": "Left edge (1..60)"},
+                "y1":          {"type": "integer", "description": "Top edge (1..25)"},
+                "x2":          {"type": "integer", "description": "Right edge (1..60)"},
+                "y2":          {"type": "integer", "description": "Bottom edge (1..25)"},
+            },
+            "required": ["path", "board_index", "x1", "y1", "x2", "y2"],
+        },
+    },
+    {
+        "name": "zzt_screenshot",
+        "description": (
+            "Take a screenshot of the live ZZT renderer in a browser and return it as an image. "
+            "Requires the renderer server to be running (python3 renderer/server.py <file>). "
+            "Returns a PNG image so you can see what the board looks like in-game."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "renderer_url": {"type": "string", "description": "URL of the renderer (default: http://localhost:8080)"},
+                "wait_ms":      {"type": "integer", "description": "Milliseconds to wait for Zeta to render (default: 2000)"},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "zzt_set_world_info",
         "description": "Update world metadata: name, health, ammo, gems, torches, score, starting board.",
         "inputSchema": {
@@ -511,6 +547,40 @@ def tool_connect_boards(args: dict) -> str:
     )
 
 
+def tool_query_region(args: dict) -> list:
+    world = load_world(args["path"])
+    board = world.boards[args["board_index"]]
+    return board.query_region(args["x1"], args["y1"], args["x2"], args["y2"])
+
+
+def tool_screenshot(args: dict) -> list:
+    """Take a screenshot of the live renderer and return an MCP image content block."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return [_text("playwright not installed. Run: pip install playwright && playwright install chromium")]
+
+    import base64
+
+    url = args.get("renderer_url", "http://localhost:8080")
+    wait_ms = args.get("wait_ms", 2000)
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": 640, "height": 400})
+            page.goto(url, timeout=10000)
+            # Wait for either a canvas (Zeta) or the ascii-art pre element (fallback)
+            page.wait_for_selector("canvas, #board-art", timeout=8000)
+            page.wait_for_timeout(wait_ms)
+            screenshot_bytes = page.screenshot(full_page=False)
+            browser.close()
+        b64 = base64.b64encode(screenshot_bytes).decode()
+        return [{"type": "image", "data": b64, "mimeType": "image/png"}]
+    except Exception as e:
+        return [_text(f"Screenshot failed: {e}\nIs the renderer running? python3 renderer/server.py <file.zzt>")]
+
+
 def tool_set_world_info(args: dict) -> str:
     path  = args["path"]
     world = load_world(path)
@@ -539,6 +609,8 @@ TOOL_HANDLERS = {
     "zzt_add_board":     tool_add_board,
     "zzt_connect_boards": tool_connect_boards,
     "zzt_set_world_info": tool_set_world_info,
+    "zzt_query_region":  tool_query_region,
+    "zzt_screenshot":    tool_screenshot,
 }
 
 
@@ -570,13 +642,17 @@ def handle_message(msg: dict) -> dict | None:
             return _error(id_, -32601, f"Unknown tool: {name!r}")
         try:
             result = handler(args)
-            if isinstance(result, dict):
-                text = json.dumps(result, indent=2)
+            # If the handler returns a list of MCP content blocks, pass them through directly
+            # (used for image responses from zzt_screenshot)
+            if isinstance(result, list) and result and isinstance(result[0], dict) and "type" in result[0]:
+                content = result
+            elif isinstance(result, dict):
+                content = [_text(json.dumps(result, indent=2))]
             elif isinstance(result, list):
-                text = json.dumps(result, indent=2)
+                content = [_text(json.dumps(result, indent=2))]
             else:
-                text = str(result)
-            return _ok(id_, {"content": [_text(text)]})
+                content = [_text(str(result))]
+            return _ok(id_, {"content": content})
         except Exception as e:
             tb = traceback.format_exc()
             return _ok(id_, {

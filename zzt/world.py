@@ -212,7 +212,7 @@ class Board:
         self.tiles[x][y] = Tile(element, color)
 
     def ascii_art(self) -> str:
-        """Return a quick ASCII representation of the board."""
+        """Return an ASCII representation of the board with x/y coordinate rulers."""
         _CHAR_MAP = {
             0: ' ', 20: '░', 21: '█', 22: '▓', 23: '▒',
             4: '@', 36: '☺', 34: 'B', 35: 'R', 41: 'L',
@@ -220,14 +220,39 @@ class Board:
             8: 'k', 9: 'd', 10: '$', 11: '≡', 13: 'b',
             14: 'E', 19: '~',
         }
-        lines = []
+        # 3-char row prefix "   " aligns with " y " row labels
+        ruler_tens = "   "
+        ruler_ones = "   "
+        for x in range(1, BOARD_WIDTH + 1):
+            ruler_tens += str(x // 10) if x % 10 == 0 else ' '
+            ruler_ones += str(x % 10)
+        lines = [ruler_tens, ruler_ones]
         for row in range(1, BOARD_HEIGHT + 1):
-            line = ""
+            line = f"{row:2} "
             for col in range(1, BOARD_WIDTH + 1):
                 t = self.tiles[col][row]
                 line += _CHAR_MAP.get(t.element, '?')
             lines.append(line)
         return "\n".join(lines)
+
+    def query_region(self, x1: int, y1: int, x2: int, y2: int) -> list:
+        """Return tile details for every cell in the bounding box (1-based, inclusive)."""
+        from zzt.world import ELEMENT_NAMES
+        # Build stat lookup: (x,y) -> stat_index
+        stat_at = {(s.x, s.y): i for i, s in enumerate(self.stats)}
+        tiles = []
+        for row in range(max(1, y1), min(BOARD_HEIGHT, y2) + 1):
+            for col in range(max(1, x1), min(BOARD_WIDTH, x2) + 1):
+                t = self.tiles[col][row]
+                tiles.append({
+                    "x": col,
+                    "y": row,
+                    "element": ELEMENT_NAMES.get(t.element, "Unknown"),
+                    "element_id": t.element,
+                    "color": f"0x{t.color:02X}",
+                    "stat_index": stat_at.get((col, row)),
+                })
+        return tiles
 
 
 @dataclass
